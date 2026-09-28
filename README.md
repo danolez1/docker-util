@@ -16,15 +16,15 @@ docker-help    Show the command list
 Run it once without installing:
 
 ```sh
-npx @danolez1/docker-util list
-npx @danolez1/docker-util stop
-npx @danolez1/docker-util prune --dry-run
+npx @danolez/docker-util list
+npx @danolez/docker-util stop
+npx @danolez/docker-util prune --dry-run
 ```
 
 Or install it so the `docker-*` commands are on your PATH:
 
 ```sh
-npm install -g @danolez1/docker-util
+npm install -g @danolez/docker-util
 ```
 
 Straight from GitHub works too, no registry needed:

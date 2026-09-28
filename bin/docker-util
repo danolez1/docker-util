@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Single entry point so `npx @danolez1/docker-util <cmd>` reaches every command.
+# Single entry point so `npx @danolez/docker-util <cmd>` reaches every command.
 set -uo pipefail
 
 self="$0"

@@ -23,4 +23,4 @@ jobs:
       - name: Package installs and runs through npx
         run: |
           npm pack
-          npx --yes ./danolez1-docker-util-*.tgz --version
+          npx --yes ./danolez-docker-util-*.tgz --version

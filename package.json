@@ -1,5 +1,5 @@
 {
-  "name": "@danolez1/docker-util",
+  "name": "@danolez/docker-util",
   "version": "1.0.0",
   "description": "Interactive Docker helpers: list, stop and prune compose projects without typing names",
   "bin": {
