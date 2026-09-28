@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Single entry point so `npx @danolez1/docker-util <cmd>` reaches every command.
+set -uo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+dir="$(dirname "$self")"
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  list|stop|prune|help) exec "$dir/docker-$cmd" "$@" ;;
+  -h|--help) exec "$dir/docker-help" ;;
+  -v|--version) exec "$dir/docker-help" --version ;;
+  *) echo "docker-util: unknown command '$cmd'" >&2; "$dir/docker-help" >&2; exit 2 ;;
+esac

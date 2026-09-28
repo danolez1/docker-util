@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Fake docker: fixed fixture state, every call appended to $STUB_LOG.
+echo "$*" >> "$STUB_LOG"
+T=$'\t'
+L="label=com.docker.compose.project"
+case "$*" in
+  "info") exit 0 ;;
+  "system df") echo "TYPE TOTAL" ;;
+  "ps --format"*) printf 'web\napi\n' ;;
+  "ps -a --format {{.Label \"com.docker.compose.project\"}}") printf 'web\napi\nold\n\n' ;;
+  "ps -a --format"*)
+    printf 'web%srunning%sweb_1%snginx%sUp 1h\n' "$T" "$T" "$T" "$T"
+    printf 'api%srunning%sapi_1%snode%sUp 1h\n' "$T" "$T" "$T" "$T"
+    printf 'old%sexited%sold_db_1%spostgres%sExited\n' "$T" "$T" "$T" "$T"
+    printf '%sexited%sloose%sredis%sExited\n' "$T" "$T" "$T" "$T" ;;
+  "ps -a --filter status=exited"*) printf 'c-old%sold_db_1%sold\nc-loose%sloose%s\n' "$T" "$T" "$T" "$T" ;;
+  "ps -q --filter $L=web"|"ps -aq --filter $L=web") echo "c-web" ;;
+  "ps -q --filter $L=api"|"ps -aq --filter $L=api") echo "c-api" ;;
+  "network ls -q --filter $L=web") echo "n-web" ;;
+  "volume ls -q --filter $L=web") echo "webdata" ;;
+  "ps -aq --filter volume=webdata") echo "c-web" ;;
+  "ps -aq --filter volume=olddata") echo "c-old" ;;
+  "ps -aq --filter volume="*) ;;
+  "ps -aq") printf 'c-web\nc-api\nc-old\nc-loose\n' ;;
+  "volume ls"*) printf 'webdata\nolddata\n%s\n' "$(printf 'a%.0s' {1..64})" ;;
+  "inspect"*) echo "sha256:webimg" ;;
+  "image ls"*)
+    printf 'sha256:webimg%snginx:latest\n' "$T"
+    printf 'sha256:unused%sredis:7\n' "$T"
+    printf 'sha256:mirror%smyreg.io/app:1\n' "$T"
+    printf 'sha256:pinned%spostgres:<none>\n' "$T"
+    printf 'sha256:dangle%s<none>:<none>\n' "$T" ;;
+  "builder prune --help") echo "      --max-used-space bytes" ;;
+  *) exit 0 ;;
+esac

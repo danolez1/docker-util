@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Compose projects and loose containers at a glance.
+set -uo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+# shellcheck source=../lib/common.sh
+. "$(dirname "$self")/../lib/common.sh"
+
+case "${1:-}" in
+  "") ;;
+  -h|--help)
+    cat <<EOF
+docker-list $DOCKER_UTIL_VERSION
+Show compose projects (running, stopped, partial) and containers outside compose.
+
+Usage: docker-list
+EOF
+    exit 0 ;;
+  -v|--version) echo "$DOCKER_UTIL_VERSION"; exit 0 ;;
+  *) echo "docker-list: unknown option '$1'" >&2; exit 2 ;;
+esac
+
+require_docker
+
+rows=$(docker ps -a --format '{{.Label "com.docker.compose.project"}}	{{.State}}	{{.Names}}	{{.Image}}	{{.Status}}')
+
+bold "Compose projects"
+printf '%s\n' "$rows" | awk -F'\t' '
+  $1 != "" {
+    total[$1]++
+    if ($2 == "running") up[$1]++
+  }
+  END {
+    n = 0
+    for (p in total) {
+      if (up[p] == total[p]) state = "running"
+      else if (up[p] > 0) state = "partial"
+      else state = "stopped"
+      printf "  %-32s %-8s %d/%d up\n", p, state, up[p], total[p]
+      n++
+    }
+    if (n == 0) print "  none"
+  }' | sort
+
+echo
+bold "Containers outside compose"
+printf '%s\n' "$rows" | awk -F'\t' '
+  $1 == "" && $3 != "" { printf "  %-32s %-8s %-30s %s\n", $3, $2, $4, $5; n++ }
+  END { if (n == 0) print "  none" }'

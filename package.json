@@ -1,0 +1,44 @@
+{
+  "name": "@danolez1/docker-util",
+  "version": "1.0.0",
+  "description": "Interactive Docker helpers: list, stop and prune compose projects without typing names",
+  "bin": {
+    "docker-util": "bin/docker-util",
+    "docker-list": "bin/docker-list",
+    "docker-stop": "bin/docker-stop",
+    "docker-prune": "bin/docker-prune",
+    "docker-help": "bin/docker-help"
+  },
+  "files": [
+    "bin/",
+    "lib/"
+  ],
+  "scripts": {
+    "test": "bash test/run.sh",
+    "lint": "shellcheck bin/* lib/common.sh test/run.sh test/stub/docker"
+  },
+  "keywords": [
+    "docker",
+    "compose",
+    "prune",
+    "stop",
+    "cleanup",
+    "cli",
+    "fzf"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danolez1/docker-util.git"
+  },
+  "homepage": "https://github.com/danolez1/docker-util#readme",
+  "bugs": "https://github.com/danolez1/docker-util/issues",
+  "author": "Fatunmbi Daniel",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

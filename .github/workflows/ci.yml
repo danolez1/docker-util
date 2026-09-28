@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck bin/* lib/common.sh test/run.sh test/stub/docker
+
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash test/run.sh
+      - name: Package installs and runs through npx
+        run: |
+          npm pack
+          npx --yes ./danolez1-docker-util-*.tgz --version

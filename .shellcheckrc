@@ -1,0 +1,4 @@
+source-path=SCRIPTDIR
+external-sources=true
+# compose_projects takes optional docker ps flags; calling it bare is intended.
+disable=SC2119

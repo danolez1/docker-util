@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Interactive Docker cleanup that never touches running compose stacks.
+set -uo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+# shellcheck source=../lib/common.sh
+. "$(dirname "$self")/../lib/common.sh"
+
+CONFIG_FILE="${DOCKER_UTIL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/docker-util/config}"
+KEEP_IMAGE_PATTERN=""
+CACHE_CAP="20GB"
+TMP_PREFIXES=""
+TMP_MAX_AGE_MIN=1440
+MOLE=1
+
+# shellcheck source=/dev/null
+[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+KEEP_IMAGE_PATTERN="${DOCKER_UTIL_KEEP_IMAGES:-$KEEP_IMAGE_PATTERN}"
+CACHE_CAP="${DOCKER_UTIL_CACHE_CAP:-$CACHE_CAP}"
+TMP_PREFIXES="${DOCKER_UTIL_TMP_PREFIXES:-$TMP_PREFIXES}"
+
+usage() {
+  cat <<EOF
+docker-prune $DOCKER_UTIL_VERSION
+Clean up stopped containers, unused images, volumes and build cache
+without touching running compose projects.
+
+Usage: docker-prune [options]
+
+Options:
+  -n, --dry-run            Show what would be removed, remove nothing
+  -y, --yes                Skip prompts: remove all stopped projects, keep all named volumes
+      --keep-image REGEX   Never remove images whose repo:tag matches REGEX (repeatable)
+      --cache-cap SIZE     Build cache to keep, e.g. 10GB (default: $CACHE_CAP)
+      --tmp-prefix PREFIX  Also delete \$TMPDIR/PREFIX* dirs older than 24h (repeatable)
+      --no-mole            Do not offer 'mo clean' afterwards
+  -h, --help               Show this help
+  -v, --version            Show version
+
+Config file: $CONFIG_FILE
+EOF
+}
+
+add_pattern() { KEEP_IMAGE_PATTERN="${KEEP_IMAGE_PATTERN:+$KEEP_IMAGE_PATTERN|}$1"; }
+need_arg() { [ -n "${2:-}" ] || { echo "docker-prune: $1 needs a value" >&2; exit 2; }; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|--dry-run) DRY_RUN=1 ;;
+    -y|--yes) ASSUME_YES=1 ;;
+    --keep-image) need_arg "$1" "${2:-}"; add_pattern "$2"; shift ;;
+    --keep-image=*) add_pattern "${1#*=}" ;;
+    --cache-cap) need_arg "$1" "${2:-}"; CACHE_CAP="$2"; shift ;;
+    --cache-cap=*) CACHE_CAP="${1#*=}" ;;
+    --tmp-prefix) need_arg "$1" "${2:-}"; TMP_PREFIXES="$TMP_PREFIXES $2"; shift ;;
+    --tmp-prefix=*) TMP_PREFIXES="$TMP_PREFIXES ${1#*=}" ;;
+    --no-mole) MOLE=0 ;;
+    -h|--help) usage; exit 0 ;;
+    -v|--version) echo "$DOCKER_UTIL_VERSION"; exit 0 ;;
+    *) echo "docker-prune: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+aborted() { echo "Aborted, nothing removed." >&2; exit 130; }
+
+require_docker
+
+bold "Docker usage before"
+docker system df
+
+running_projects=$(compose_projects)
+all_projects=$(compose_projects -a)
+stopped_projects=$(comm -23 <(printf '%s\n' "$all_projects") <(printf '%s\n' "$running_projects"))
+
+echo
+bold "Running compose projects (always kept)"
+# shellcheck disable=SC2086
+printf '  %s\n' ${running_projects:-none}
+
+kept_projects=""
+if [ -n "$stopped_projects" ]; then
+  echo
+  kept_projects=$(pick_many "Stopped compose projects to KEEP" "$stopped_projects") || aborted
+fi
+protected_projects=$(printf '%s\n%s\n' "$running_projects" "$kept_projects" | sed '/^$/d' | sort -u)
+doomed_projects=$(comm -23 <(printf '%s\n' "$stopped_projects" | sed '/^$/d') <(printf '%s\n' "$protected_projects"))
+
+doomed_containers=""
+while IFS=$'\t' read -r id name project; do
+  [ -z "$id" ] && continue
+  [ -n "$project" ] && in_list "$project" "$protected_projects" && continue
+  doomed_containers+="$id	$name	${project:-(no compose project)}"$'\n'
+done < <(docker ps -a --filter status=exited --filter status=created --filter status=dead \
+  --format '{{.ID}}\t{{.Names}}\t{{.Label "com.docker.compose.project"}}')
+
+container_ids=$(printf '%s' "$doomed_containers" | cut -f1 | sed '/^$/d')
+# Named volumes are only deleted when picked; fixed-name ones can hold backups.
+unused_volumes=""
+while IFS= read -r vol; do
+  [ -z "$vol" ] && continue
+  # Anonymous volumes are handled by `volume prune` below.
+  [[ "$vol" =~ ^[0-9a-f]{64}$ ]] && continue
+  users=$(docker ps -aq --filter volume="$vol" | grep -vxF -f <(printf '%s\n' "$container_ids"))
+  [ -z "$users" ] && unused_volumes+="$vol"$'\n'
+done < <(docker volume ls --format '{{.Name}}')
+unused_volumes=$(printf '%s' "$unused_volumes" | sed '/^$/d')
+
+doomed_volumes=""
+if [ -n "$unused_volumes" ]; then
+  echo
+  doomed_volumes=$(pick_many "Unused named volumes to DELETE (may be backups)" "$unused_volumes") || aborted
+fi
+
+echo
+bold "Plan"
+echo "Stopped projects to remove:"
+# shellcheck disable=SC2086
+printf '  %s\n' ${doomed_projects:-none}
+echo "Stopped containers to remove:"
+printf '%s' "${doomed_containers:-  none
+}" | awk -F'\t' 'NF>1 {printf "  %s (%s)\n", $2, $3} NF<=1 {print}'
+echo "Named volumes to remove:"
+# shellcheck disable=SC2086
+printf '  %s\n' ${doomed_volumes:-none}
+echo "Also: anonymous unused volumes, dangling images, unused images"
+echo "      (except images of kept projects${KEEP_IMAGE_PATTERN:+ and $KEEP_IMAGE_PATTERN}),"
+echo "      build cache trimmed to $CACHE_CAP."
+[ -n "${TMP_PREFIXES// /}" ] && echo "      \$TMPDIR dirs older than ${TMP_MAX_AGE_MIN}m matching:$TMP_PREFIXES"
+
+if [ "$DRY_RUN" = 0 ] && ! confirm "Proceed?"; then
+  echo "Nothing removed."
+  exit 0
+fi
+
+echo
+bold "Removing"
+# shellcheck disable=SC2086
+[ -n "$container_ids" ] && run docker rm -v $container_ids >/dev/null
+for vol in $doomed_volumes; do
+  run docker volume rm "$vol" >/dev/null
+done
+run docker volume prune -f
+
+# Containers pending removal are excluded so a dry run lists the same images a real run removes.
+used_images=$(docker ps -aq | grep -vxF -f <(printf '%s\n' "$container_ids") |
+  xargs docker inspect 2>/dev/null --format '{{.Image}}' | sort -u)
+while IFS=$'\t' read -r id ref; do
+  [ -z "$id" ] && continue
+  in_list "$id" "$used_images" && continue
+  # An empty regex matches everything, so it must mean "keep nothing extra".
+  [ -n "$KEEP_IMAGE_PATTERN" ] && [[ "$ref" =~ $KEEP_IMAGE_PATTERN ]] && continue
+  [ "$ref" = "<none>:<none>" ] && continue
+  # Digest-pinned pulls have no tag, so only their ID addresses them.
+  [[ "$ref" == *:"<none>" ]] && ref="$id"
+  run docker image rm "$ref" >/dev/null 2>&1
+done < <(docker image ls --no-trunc --format '{{.ID}}\t{{.Repository}}:{{.Tag}}')
+run docker image prune -f >/dev/null
+
+# --keep-storage was renamed to --max-used-space in newer buildx.
+if docker builder prune --help 2>&1 | grep -q -- --max-used-space; then
+  run docker builder prune -af --max-used-space "$CACHE_CAP"
+else
+  run docker builder prune -af --keep-storage "$CACHE_CAP"
+fi
+
+tmp_root="${TMPDIR:-/tmp}"
+for prefix in $TMP_PREFIXES; do
+  find "$tmp_root" -maxdepth 1 -type d -name "${prefix}*" -mmin +"$TMP_MAX_AGE_MIN" -print0 2>/dev/null |
+    while IFS= read -r -d '' dir; do run rm -rf "$dir"; done
+done
+
+echo
+bold "Docker usage after"
+docker system df
+
+if [ "$MOLE" = 1 ] && command -v mo >/dev/null 2>&1; then
+  echo
+  if [ "$DRY_RUN" = 1 ]; then
+    dim "  would offer: mo clean (macOS caches, logs, temp)"
+  elif [ "$ASSUME_YES" = 0 ] && confirm "Also clean macOS caches and temp with Mole (mo clean)?"; then
+    mo clean
+  fi
+fi

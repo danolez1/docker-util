@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Stop running compose projects picked from a list, then optionally delete them.
+set -uo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+# shellcheck source=../lib/common.sh
+. "$(dirname "$self")/../lib/common.sh"
+
+usage() {
+  cat <<EOF
+docker-stop $DOCKER_UTIL_VERSION
+Pick running compose projects to stop, then pick which of those to delete.
+
+Usage: docker-stop [options]
+
+Options:
+  -n, --dry-run   Show what would happen, change nothing
+  -h, --help      Show this help
+  -v, --version   Show version
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|--dry-run) DRY_RUN=1 ;;
+    -h|--help) usage; exit 0 ;;
+    -v|--version) echo "$DOCKER_UTIL_VERSION"; exit 0 ;;
+    *) echo "docker-stop: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+aborted() { echo "Aborted, nothing $1." >&2; exit 130; }
+by_project() { printf 'label=com.docker.compose.project=%s' "$1"; }
+
+require_docker
+
+running=$(compose_projects)
+if [ -z "$running" ]; then
+  echo "No running compose projects."
+  exit 0
+fi
+
+chosen=$(pick_many "Compose projects to STOP" "$running") || aborted "stopped"
+if [ -z "$chosen" ]; then
+  echo "Nothing stopped."
+  exit 0
+fi
+
+bold "Stopping"
+for project in $chosen; do
+  echo "  $project"
+  # shellcheck disable=SC2046
+  run docker stop $(docker ps -q --filter "$(by_project "$project")") >/dev/null
+done
+
+echo
+doomed=$(pick_many "Stopped projects to also DELETE (containers and networks)" "$chosen") || aborted "deleted"
+if [ -z "$doomed" ]; then
+  echo "Stopped, nothing deleted."
+  exit 0
+fi
+
+# Volumes hold the data, so wiping them is a separate, explicit choice.
+volumes=$(pick_one "Volumes of deleted projects" "Keep volumes" "Delete volumes too") || aborted "deleted"
+
+echo
+bold "Deleting"
+for project in $doomed; do
+  echo "  $project"
+  filter=$(by_project "$project")
+  ids=$(docker ps -aq --filter "$filter")
+  # shellcheck disable=SC2086
+  [ -n "$ids" ] && run docker rm -v $ids >/dev/null
+  nets=$(docker network ls -q --filter "$filter")
+  # shellcheck disable=SC2086
+  [ -n "$nets" ] && run docker network rm $nets >/dev/null
+  if [ "$volumes" = "Delete volumes too" ]; then
+    vols=$(docker volume ls -q --filter "$filter")
+    # shellcheck disable=SC2086
+    [ -n "$vols" ] && run docker volume rm $vols >/dev/null
+  fi
+done
+echo "Done."

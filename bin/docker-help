@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+# shellcheck source=../lib/common.sh
+. "$(dirname "$self")/../lib/common.sh"
+
+case "${1:-}" in -v|--version) echo "$DOCKER_UTIL_VERSION"; exit 0 ;; esac
+
+cat <<EOF
+docker-util $DOCKER_UTIL_VERSION
+
+  docker-list    Show compose projects and containers outside compose
+  docker-stop    Pick running compose projects to stop, then pick which to delete
+  docker-prune   Clean stopped containers, unused images, volumes and build cache
+                 (running compose projects are never touched)
+  docker-help    Show this list
+
+Each command also runs as 'docker-util <list|stop|prune|help>'.
+Add --help to any command for its options. --dry-run works on stop and prune.
+
+Picker in use: $(picker) (fzf, then gum, then a built-in arrow-key menu)
+EOF
